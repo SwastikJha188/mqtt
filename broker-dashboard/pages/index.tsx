@@ -165,8 +165,8 @@ export default function BrokerPage() {
         sendProbe();
         probeIntervalRef.current = setInterval(sendProbe, 3000);
 
-        // Sniff all ULTRON topics
-        client.subscribe('ultron/#', { qos: 1 });
+        // Sniff ALL topics across the broker
+        client.subscribe('#', { qos: 0 });
       });
 
       client.on('message', (topic: string, payload: Buffer, packet: any) => {
@@ -193,28 +193,56 @@ export default function BrokerPage() {
         const baseWireLatency = measuredOneWayRef.current > 0 ? measuredOneWayRef.current : 85;
         try {
           parsed = JSON.parse(payloadStr);
-          if (parsed.created_at_us && !isRetained) {
-            const nowUs = BigInt(Date.now()) * BigInt(1000);
-            const sentUs = BigInt(parsed.created_at_us);
-            const rawDiff = Number(nowUs - sentUs) / 1000;
-            if (rawDiff >= 0 && rawDiff < 60000) {
-              latency = rawDiff;
-              // Auto-calibrate clock skew between physical machines
-              if (Math.abs(latency - baseWireLatency) > 180) {
-                if (clockSkewRef.current === null) {
-                  clockSkewRef.current = latency - baseWireLatency;
+          const tsVal = parsed.created_at_us ?? parsed.timestamp ?? parsed.time ?? parsed.ts ?? parsed.t;
+          if (tsVal && !isRetained) {
+            let sentMs = 0;
+            if (typeof tsVal === 'string' && /^\d+$/.test(tsVal)) {
+              const num = Number(tsVal);
+              sentMs = num > 1e14 ? num / 1000 : num > 1e11 ? num : num * 1000;
+            } else if (typeof tsVal === 'number') {
+              sentMs = tsVal > 1e14 ? tsVal / 1000 : tsVal > 1e11 ? tsVal : tsVal * 1000;
+            }
+            if (sentMs > 0) {
+              const rawDiff = Date.now() - sentMs;
+              if (rawDiff >= 0 && rawDiff < 60000) {
+                latency = rawDiff;
+                if (Math.abs(latency - baseWireLatency) > 180) {
+                  if (clockSkewRef.current === null) {
+                    clockSkewRef.current = latency - baseWireLatency;
+                  }
+                  latency = latency - clockSkewRef.current;
                 }
-                latency = latency - clockSkewRef.current;
-              }
-              if (latency < 15) {
-                latency = baseWireLatency + (Math.random() * 8);
+                if (latency < 15) {
+                  latency = baseWireLatency + (Math.random() * 8);
+                }
               }
             }
           }
-          if (parsed.gateway_id) {
-            setActiveClients((prev) => new Set([...prev, parsed.gateway_id]));
-          }
         } catch {}
+
+        let detectedClient = '';
+        if (parsed) {
+          detectedClient =
+            parsed.gateway_id ||
+            parsed.gatewayId ||
+            parsed.gateway ||
+            parsed.device_id ||
+            parsed.deviceId ||
+            parsed.device ||
+            parsed.station_id ||
+            parsed.clientId ||
+            parsed.client_id ||
+            parsed.id ||
+            parsed.node_id ||
+            '';
+        }
+        if (!detectedClient) {
+          const match = topic.match(/(?:gateways?|devices?|nodes?|sensors?)\/([^/]+)/i);
+          detectedClient = match ? match[1] : topic.split('/')[0];
+        }
+        if (detectedClient) {
+          setActiveClients((prev) => new Set([...prev, detectedClient]));
+        }
 
         setActiveTopics((prev) => new Set([...prev, topic]));
         setTotalMessages((prev) => prev + 1);
