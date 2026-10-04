@@ -254,6 +254,12 @@ export default function BrokerPage() {
               >
                 Public HiveMQ WSS
               </button>
+              <button
+                onClick={() => setBrokerUrl('wss://broker.emqx.io:8084/mqtt')}
+                className="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded border border-emerald-800/60"
+              >
+                Public EMQX WSS
+              </button>
             </div>
           </div>
 
