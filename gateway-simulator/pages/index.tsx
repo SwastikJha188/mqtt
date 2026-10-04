@@ -85,7 +85,7 @@ export default function GatewayPage() {
         connectTimeout: 30000, // 30s timeout for remote / 2G / cellular networks
         reconnectPeriod: 2000, // auto-reconnect every 2s if signal drops
         keepalive: 60,
-        protocolVersion: 5,
+        protocolVersion: 4, // MQTT 3.1.1 (universal compatibility & no broker quota locks)
         will: {
           topic: `ultron/v1/gateways/${gatewayId}/status`,
           payload: Buffer.from(
