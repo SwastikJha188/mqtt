@@ -93,7 +93,9 @@ export default function BrokerPage() {
       const client = mqtt.connect(targetUrl, {
         clientId: `ultron-broker-monitor-${Math.random().toString(16).slice(2, 8)}`,
         clean: true,
-        connectTimeout: 5000,
+        connectTimeout: 30000, // 30s timeout for remote / 2G / cellular networks
+        reconnectPeriod: 2000, // auto-reconnect every 2s if signal drops
+        keepalive: 60,
         protocolVersion: 5,
       });
 

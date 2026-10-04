@@ -82,7 +82,9 @@ export default function GatewayPage() {
       const client = mqtt.connect(targetUrl, {
         clientId: `ultron-gw-${gatewayId}-${Math.random().toString(16).slice(2, 6)}`,
         clean: true,
-        connectTimeout: 5000,
+        connectTimeout: 30000, // 30s timeout for remote / 2G / cellular networks
+        reconnectPeriod: 2000, // auto-reconnect every 2s if signal drops
+        keepalive: 60,
         protocolVersion: 5,
         will: {
           topic: `ultron/v1/gateways/${gatewayId}/status`,
