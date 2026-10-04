@@ -115,12 +115,16 @@ export default function BrokerPage() {
 
         let parsed: any = null;
         let latency: number | null = null;
+        const isRetained = packet?.retain ?? false;
         try {
           parsed = JSON.parse(payloadStr);
-          if (parsed.created_at_us) {
+          if (parsed.created_at_us && !isRetained) {
             const nowUs = BigInt(Date.now()) * BigInt(1000);
             const sentUs = BigInt(parsed.created_at_us);
-            latency = Number(nowUs - sentUs) / 1000;
+            const diff = Number(nowUs - sentUs) / 1000;
+            if (diff >= 0 && diff < 10000) {
+              latency = diff;
+            }
           }
           if (parsed.gateway_id) {
             setActiveClients((prev) => new Set([...prev, parsed.gateway_id]));
