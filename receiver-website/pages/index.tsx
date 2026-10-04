@@ -43,6 +43,28 @@ interface Envelope {
   payload: TelemetryPayload;
 }
 
+function formatBandwidth(kbps: number): { value: string; unit: string } {
+  if (kbps >= 1000000) {
+    return { value: (kbps / 1000000).toFixed(2), unit: 'Gbps' };
+  } else if (kbps >= 1000) {
+    return { value: (kbps / 1000).toFixed(2), unit: 'Mbps' };
+  } else {
+    return { value: kbps.toFixed(1), unit: 'kbps' };
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1073741824) {
+    return `${(bytes / 1073741824).toFixed(2)} GB`;
+  } else if (bytes >= 1048576) {
+    return `${(bytes / 1048576).toFixed(2)} MB`;
+  } else if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  } else {
+    return `${bytes} B`;
+  }
+}
+
 export default function ReceiverPage() {
   const [brokerUrl, setBrokerUrl] = useState(process.env.NEXT_PUBLIC_MQTT_BROKER_URL || 'ws://127.0.0.1:8088/mqtt');
   const [slaTarget] = useState(Number(process.env.NEXT_PUBLIC_LATENCY_SLA_MS || 220));
@@ -56,6 +78,13 @@ export default function ReceiverPage() {
   const [minLatency, setMinLatency] = useState<number>(Infinity);
   const [maxLatency, setMaxLatency] = useState<number>(0);
   const [avgLatency, setAvgLatency] = useState<number>(0);
+
+  // Throughput & Packet Rate
+  const [totalBytes, setTotalBytes] = useState(0);
+  const [currentKbps, setCurrentKbps] = useState(0);
+  const [packetsPerSec, setPacketsPerSec] = useState(0);
+  const bytesInWindow = useRef(0);
+  const packetsInWindow = useRef(0);
 
   const [totalReceived, setTotalReceived] = useState(0);
   const [lostFrames, setLostFrames] = useState(0);
@@ -79,6 +108,18 @@ export default function ReceiverPage() {
   const measuredOneWayRef = useRef<number>(85);
   const clockSkewRef = useRef<number | null>(null);
   const probeIntervalRef = useRef<any>(null);
+
+  // Live throughput & packet rate calculation
+  useEffect(() => {
+    const t = setInterval(() => {
+      const kbps = (bytesInWindow.current * 8) / 1000;
+      setCurrentKbps(kbps);
+      setPacketsPerSec(packetsInWindow.current);
+      bytesInWindow.current = 0;
+      packetsInWindow.current = 0;
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
 
   // Disconnect on unmount
   useEffect(() => {
@@ -171,6 +212,11 @@ export default function ReceiverPage() {
           } catch {}
           return;
         }
+
+        const payloadLength = (payload as any)?.length ?? (payload as any)?.byteLength ?? 0;
+        bytesInWindow.current += payloadLength;
+        packetsInWindow.current += 1;
+        setTotalBytes((prev) => prev + payloadLength);
 
         try {
           const envelope: Envelope = JSON.parse(payload.toString('utf8'));
@@ -387,7 +433,7 @@ export default function ReceiverPage() {
         )}
 
         {/* TOP METRIC CARDS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Latency SLA Card */}
           <div className={`p-5 rounded-xl border ${slaPassed ? 'bg-emerald-950/20 border-emerald-500/40' : currentLatency === null ? 'bg-[#0F1420] border-slate-800' : 'bg-rose-950/20 border-rose-500/40'}`}>
             <div className="flex justify-between items-start mb-2">
@@ -403,6 +449,23 @@ export default function ReceiverPage() {
               <span>Min: {minLatency === Infinity ? '--' : `${minLatency.toFixed(1)}ms`}</span>
               <span>Avg: {avgLatency > 0 ? `${avgLatency.toFixed(1)}ms` : '--'}</span>
               <span>Max: {maxLatency > 0 ? `${maxLatency.toFixed(1)}ms` : '--'}</span>
+            </div>
+          </div>
+
+          {/* Wire Throughput Card (kbps to Gbps) */}
+          <div className="p-5 rounded-xl bg-[#0F1420] border border-slate-800">
+            <div className="flex justify-between items-start mb-2">
+              <span className="text-xs uppercase font-semibold text-slate-400">Wire Throughput</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 uppercase">
+                {packetsPerSec} msg/sec
+              </span>
+            </div>
+            <div className="text-3xl font-extrabold text-white">
+              {formatBandwidth(currentKbps).value} <span className="text-base font-normal text-slate-400">{formatBandwidth(currentKbps).unit}</span>
+            </div>
+            <div className="mt-2 text-xs text-slate-400 flex justify-between">
+              <span>Ingested: {formatBytes(totalBytes)}</span>
+              <span>Packets: {totalReceived}</span>
             </div>
           </div>
 

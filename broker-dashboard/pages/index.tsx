@@ -14,6 +14,44 @@ interface BrokerMessage {
   latencyMs?: number | null;
 }
 
+interface NetworkTier {
+  id: string;
+  name: string;
+  label: string;
+  kbps: number;
+}
+
+const NETWORK_TIERS: NetworkTier[] = [
+  { id: '2g', name: '2G', label: '120 kbps', kbps: 120 },
+  { id: '3g', name: '3G', label: '7.2 Mbps', kbps: 7200 },
+  { id: '4g', name: '4G', label: '50 Mbps', kbps: 50000 },
+  { id: '5g', name: '5G', label: '500 Mbps', kbps: 500000 },
+  { id: '1g', name: '1G', label: '1 Gbps', kbps: 1000000 },
+  { id: '10g', name: '10G', label: '10 Gbps', kbps: 10000000 },
+];
+
+function formatBandwidth(kbps: number): { value: string; unit: string } {
+  if (kbps >= 1000000) {
+    return { value: (kbps / 1000000).toFixed(2), unit: 'Gbps' };
+  } else if (kbps >= 1000) {
+    return { value: (kbps / 1000).toFixed(2), unit: 'Mbps' };
+  } else {
+    return { value: kbps.toFixed(1), unit: 'kbps' };
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1073741824) {
+    return `${(bytes / 1073741824).toFixed(2)} GB`;
+  } else if (bytes >= 1048576) {
+    return `${(bytes / 1048576).toFixed(2)} MB`;
+  } else if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  } else {
+    return `${bytes} B`;
+  }
+}
+
 export default function BrokerPage() {
   const [brokerUrl, setBrokerUrl] = useState(process.env.NEXT_PUBLIC_MQTT_BROKER_URL || 'ws://127.0.0.1:8088/mqtt');
   const [connected, setConnected] = useState(false);
@@ -31,8 +69,9 @@ export default function BrokerPage() {
   const [activeClients, setActiveClients] = useState<Set<string>>(new Set());
   const [currentKbps, setCurrentKbps] = useState(0);
 
-  // 2G Speed Simulation Monitor
-  const [maxBandwidthKbps] = useState(Number(process.env.NEXT_PUBLIC_2G_MAX_KBPS || 120)); // 2G Limit: 120 kbps
+  // Speed Profile & Link Capacity (from kbps to Gbps)
+  const [networkTier, setNetworkTier] = useState('2g');
+  const [maxBandwidthKbps, setMaxBandwidthKbps] = useState(120);
 
   const clientRef = useRef<any>(null);
   const bytesInWindow = useRef<number>(0);
@@ -340,16 +379,16 @@ export default function BrokerPage() {
 
         {/* METRIC OVERVIEW CARDS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* 2G Bandwidth Utilization Card */}
+          {/* Wire Bandwidth Utilization Card */}
           <div className="p-5 rounded-xl bg-[#0F1420] border border-slate-800">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs uppercase font-semibold text-slate-400">2G Wire Throughput</span>
+              <span className="text-xs uppercase font-semibold text-slate-400">Wire Throughput</span>
               <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase">
-                Cap: 120 kbps
+                Cap: {NETWORK_TIERS.find(t => t.id === networkTier)?.label || `${maxBandwidthKbps} kbps`}
               </span>
             </div>
             <div className="text-3xl font-extrabold text-white">
-              {currentKbps.toFixed(1)} <span className="text-base font-normal text-slate-400">kbps</span>
+              {formatBandwidth(currentKbps).value} <span className="text-base font-normal text-slate-400">{formatBandwidth(currentKbps).unit}</span>
             </div>
             {/* Bandwidth meter */}
             <div className="mt-3 w-full bg-slate-800 rounded-full h-2 overflow-hidden">
@@ -359,8 +398,24 @@ export default function BrokerPage() {
               />
             </div>
             <div className="mt-1 text-[11px] text-slate-400 flex justify-between">
-              <span>{bandwidthUsagePct.toFixed(0)}% of 2G link</span>
-              <span>Headroom: {(maxBandwidthKbps - currentKbps).toFixed(1)} kbps</span>
+              <span>{bandwidthUsagePct.toFixed(0)}% link utilized</span>
+              <span>Headroom: {formatBandwidth(Math.max(0, maxBandwidthKbps - currentKbps)).value} {formatBandwidth(Math.max(0, maxBandwidthKbps - currentKbps)).unit}</span>
+            </div>
+            {/* Interactive Network Speed Tier Buttons (kbps to Gbps) */}
+            <div className="flex flex-wrap gap-1 mt-3 pt-2.5 border-t border-slate-800/80">
+              {NETWORK_TIERS.map((tier) => (
+                <button
+                  key={tier.id}
+                  onClick={() => { setNetworkTier(tier.id); setMaxBandwidthKbps(tier.kbps); }}
+                  className={`px-1.5 py-0.5 text-[10px] rounded border transition ${
+                    networkTier === tier.id
+                      ? 'bg-amber-500 text-slate-950 font-bold border-amber-400'
+                      : 'bg-slate-900/80 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+                  }`}
+                >
+                  {tier.name}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -376,7 +431,7 @@ export default function BrokerPage() {
               {totalMessages}
             </div>
             <div className="mt-2 text-xs text-slate-400 flex justify-between">
-              <span>Total Data: {(totalBytes / 1024).toFixed(1)} KB</span>
+              <span>Total Data: {formatBytes(totalBytes)}</span>
               <span>Buffer: {messages.length}</span>
             </div>
           </div>

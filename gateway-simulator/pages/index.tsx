@@ -2,6 +2,46 @@ import React, { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 
+interface NetworkProfile {
+  id: string;
+  name: string;
+  speedLabel: string;
+  bandwidthKbps: number;
+  delayMs: number;
+  badge: string;
+}
+
+const NETWORK_PROFILES: NetworkProfile[] = [
+  { id: '2g', name: '2G EDGE', speedLabel: '120 kbps', bandwidthKbps: 120, delayMs: 100, badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+  { id: '3g', name: '3G HSPA+', speedLabel: '7.2 Mbps', bandwidthKbps: 7200, delayMs: 45, badge: 'bg-orange-500/20 text-orange-300 border-orange-500/40' },
+  { id: '4g', name: '4G LTE', speedLabel: '50 Mbps', bandwidthKbps: 50000, delayMs: 25, badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
+  { id: '5g', name: '5G Ultra', speedLabel: '500 Mbps', bandwidthKbps: 500000, delayMs: 8, badge: 'bg-purple-500/20 text-purple-300 border-purple-500/40' },
+  { id: '1g', name: '1 Gbps Fiber', speedLabel: '1 Gbps', bandwidthKbps: 1000000, delayMs: 2, badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
+  { id: '10g', name: '10 Gbps DC', speedLabel: '10 Gbps', bandwidthKbps: 10000000, delayMs: 0, badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
+];
+
+function formatBandwidth(kbps: number): string {
+  if (kbps >= 1000000) {
+    return `${(kbps / 1000000).toFixed(2)} Gbps`;
+  } else if (kbps >= 1000) {
+    return `${(kbps / 1000).toFixed(2)} Mbps`;
+  } else {
+    return `${kbps.toFixed(1)} kbps`;
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1073741824) {
+    return `${(bytes / 1073741824).toFixed(2)} GB`;
+  } else if (bytes >= 1048576) {
+    return `${(bytes / 1048576).toFixed(2)} MB`;
+  } else if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  } else {
+    return `${bytes} B`;
+  }
+}
+
 export default function GatewayPage() {
   // Broker Connection
   const [brokerUrl, setBrokerUrl] = useState(process.env.NEXT_PUBLIC_MQTT_BROKER_URL || 'ws://127.0.0.1:8088/mqtt');
@@ -14,11 +54,13 @@ export default function GatewayPage() {
   const [rackId, setRackId] = useState(process.env.NEXT_PUBLIC_RACK_ID || 'Rack-A');
   const [gatewayIp, setGatewayIp] = useState(process.env.NEXT_PUBLIC_GATEWAY_IP || '192.168.1.13');
 
-  // 2G & Latency Tuning (< 220 ms target)
-  const [publishInterval, setPublishInterval] = useState(Number(process.env.NEXT_PUBLIC_PUBLISH_INTERVAL_S || 1.0));
-  const [simulatedNetworkDelay, setSimulatedNetworkDelay] = useState(Number(process.env.NEXT_PUBLIC_SIMULATED_DELAY_MS || 100));
-  const [qosTelemetry, setQosTelemetry] = useState<0 | 1>(Number(process.env.NEXT_PUBLIC_QOS || 0) as 0 | 1);
-  const [stripDuplicateLatest, setStripDuplicateLatest] = useState(process.env.NEXT_PUBLIC_STRIP_DUPLICATE_LATEST !== 'false');
+  // Network Speed & Cadence Controls (from kbps to Gbps)
+  const [networkProfileId, setNetworkProfileId] = useState('2g');
+  const [publishIntervalMs, setPublishIntervalMs] = useState(1000); // 10ms - 5000ms
+  const [payloadDensity, setPayloadDensity] = useState(1); // 1x to 500x multiplier
+  const [simulatedNetworkDelay, setSimulatedNetworkDelay] = useState(100);
+  const [qosTelemetry, setQosTelemetry] = useState<0 | 1>(0);
+  const [stripDuplicateLatest, setStripDuplicateLatest] = useState(false);
 
   // Machine Parameters (Sliders)
   const [zone1Temp, setZone1Temp] = useState(195.5);
@@ -32,6 +74,7 @@ export default function GatewayPage() {
   const [totalPublished, setTotalPublished] = useState(0);
   const [currentSequence, setCurrentSequence] = useState(1);
   const [bytesSent, setBytesSent] = useState(0);
+  const [currentKbps, setCurrentKbps] = useState(0);
 
   // Offline Spooling Simulation
   const [isSimulatedCut, setIsSimulatedCut] = useState(false);
@@ -41,6 +84,23 @@ export default function GatewayPage() {
   const bootIdRef = useRef<string>(`boot-${Math.random().toString(16).slice(2, 10)}`);
   const publishTimerRef = useRef<any>(null);
   const sequenceRef = useRef(1);
+  const bytesInWindow = useRef(0);
+
+  // Calculate live bitrate throughput
+  useEffect(() => {
+    const t = setInterval(() => {
+      const kbps = (bytesInWindow.current * 8) / 1000;
+      setCurrentKbps(kbps);
+      bytesInWindow.current = 0;
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Dynamically apply network speed profile
+  const applyNetworkProfile = (prof: NetworkProfile) => {
+    setNetworkProfileId(prof.id);
+    setSimulatedNetworkDelay(prof.delayMs);
+  };
 
   // Cleanup on unmount
   useEffect(() => {
@@ -191,6 +251,14 @@ export default function GatewayPage() {
     );
   };
 
+  // Dynamically update cadence timer while active
+  useEffect(() => {
+    if (isPublishing && publishTimerRef.current) {
+      clearInterval(publishTimerRef.current);
+      publishTimerRef.current = setInterval(sendTelemetrySample, publishIntervalMs);
+    }
+  }, [publishIntervalMs, isPublishing]);
+
   const togglePublishing = () => {
     if (isPublishing) {
       if (publishTimerRef.current) clearInterval(publishTimerRef.current);
@@ -198,7 +266,7 @@ export default function GatewayPage() {
       setIsPublishing(false);
     } else {
       setIsPublishing(true);
-      publishTimerRef.current = setInterval(sendTelemetrySample, publishInterval * 1000);
+      publishTimerRef.current = setInterval(sendTelemetrySample, publishIntervalMs);
       sendTelemetrySample();
     }
   };
@@ -207,10 +275,33 @@ export default function GatewayPage() {
     const seq = sequenceRef.current++;
     setCurrentSequence(seq);
 
-    // Microsecond timestamp calculation (with 2G simulated transmission delay)
-    // created_at_us marks when the sensor reading happened on the Raspberry Pi
     const nowUs = Date.now() * 1000;
     const sendTimestampUs = nowUs - simulatedNetworkDelay * 1000;
+
+    const baseSlots = [
+      { slot: 1, channel: 1, name: 'Feed Zone', value: zone1Temp, unit: '°C' },
+      { slot: 2, channel: 1, name: 'Compression Zone', value: zone2Temp, unit: '°C' },
+      { slot: 3, channel: 1, name: 'Melt Pressure', value: meltPressure, unit: 'bar' },
+      { slot: 4, channel: 1, name: 'Screw Speed', value: screwRpm, unit: 'RPM' },
+      { slot: 5, channel: 1, name: 'Drive Motor', value: motorCurrent, unit: 'A' },
+    ];
+
+    // Payload density multiplier to saturate from kbps up to Gbps
+    let expandedSlots = baseSlots;
+    if (payloadDensity > 1) {
+      expandedSlots = [];
+      const totalRacks = Math.min(payloadDensity, 250);
+      for (let r = 0; r < totalRacks; r++) {
+        baseSlots.forEach((s) => {
+          expandedSlots.push({
+            ...s,
+            slot: r * 5 + s.slot,
+            name: `Rack${r + 1} ${s.name}`,
+            value: Number((s.value + (r % 7)).toFixed(2)),
+          });
+        });
+      }
+    }
 
     const payload = {
       rack_id: rackId,
@@ -218,13 +309,9 @@ export default function GatewayPage() {
       pressure: meltPressure,
       rpm: screwRpm,
       motor_current: motorCurrent,
-      slots: [
-        { slot: 1, channel: 1, name: 'Feed Zone', value: zone1Temp, unit: '°C' },
-        { slot: 2, channel: 1, name: 'Compression Zone', value: zone2Temp, unit: '°C' },
-        { slot: 3, channel: 1, name: 'Melt Pressure', value: meltPressure, unit: 'bar' },
-        { slot: 4, channel: 1, name: 'Screw Speed', value: screwRpm, unit: 'RPM' },
-        { slot: 5, channel: 1, name: 'Drive Motor', value: motorCurrent, unit: 'A' },
-      ],
+      density_factor: payloadDensity,
+      total_channels: expandedSlots.length,
+      slots: expandedSlots,
     };
 
     const envelope = {
@@ -244,6 +331,9 @@ export default function GatewayPage() {
 
     const messageJson = JSON.stringify(envelope);
     const msgBytes = messageJson.length;
+    bytesInWindow.current += msgBytes;
+    setBytesSent((prev) => prev + msgBytes);
+    setTotalPublished((prev) => prev + 1);
 
     // If cellular signal is currently "Cut", spool into offline buffer!
     if (isSimulatedCut || !connected) {
@@ -259,9 +349,6 @@ export default function GatewayPage() {
       if (!stripDuplicateLatest) {
         clientRef.current.publish(`${topic}/latest`, messageJson, { qos: qosTelemetry, retain: true });
       }
-
-      setTotalPublished((prev) => prev + 1);
-      setBytesSent((prev) => prev + msgBytes);
     }
   };
 
@@ -381,89 +468,184 @@ export default function GatewayPage() {
           </div>
         )}
 
-        {/* 2G NETWORK & SLA TUNING CONTROLS */}
-        <div className="bg-[#0F1420] border border-slate-800 rounded-xl p-5 space-y-4">
-          <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+        {/* NETWORK SPEED PROFILE & CADENCE CONTROLS (KBPS TO GBPS) */}
+        <div className="bg-[#0F1420] border border-slate-800 rounded-xl p-5 space-y-5">
+          {/* Header & Live Throughput Badge */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-slate-800">
             <div>
-              <h2 className="text-base font-semibold text-white">2G Low-Latency SLA & Cellular Settings</h2>
-              <p className="text-xs text-slate-400">Configured to guarantee end-to-end latency &lt; 220 ms and 0% data loss</p>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-semibold text-white">Network Speed & Sending Cadence</h2>
+                <span className="text-[11px] px-2 py-0.5 rounded-full font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 uppercase">
+                  kbps ➔ Gbps
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">Scale network profiles from 2G (120 kbps) up to 10 Gbps and tune sending rate up to 100 Hz</p>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold px-3 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full">
-                Target: &lt; 220 ms
-              </span>
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Live Output Throughput</span>
+                <span className="text-base font-mono font-extrabold text-emerald-400">
+                  {formatBandwidth(currentKbps)}
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Delay Slider */}
-            <div className="p-3.5 bg-slate-900/60 rounded-lg border border-slate-800">
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-slate-400 font-semibold">Simulated 2G Delay</span>
-                <span className="text-emerald-400 font-bold">{simulatedNetworkDelay} ms</span>
+          {/* 1. Network Profile Selector (kbps to Gbps) */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+              Select Network Speed Profile (kbps to Gbps)
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              {NETWORK_PROFILES.map((prof) => (
+                <button
+                  key={prof.id}
+                  onClick={() => applyNetworkProfile(prof)}
+                  className={`p-2.5 rounded-lg border text-left transition flex flex-col justify-between ${
+                    networkProfileId === prof.id
+                      ? 'bg-slate-800 border-cyan-400 ring-1 ring-cyan-400 shadow-md'
+                      : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-400'
+                  }`}
+                >
+                  <span className={`text-xs font-bold ${networkProfileId === prof.id ? 'text-white' : 'text-slate-300'}`}>
+                    {prof.name}
+                  </span>
+                  <span className="text-[11px] font-mono text-cyan-400 mt-1">{prof.speedLabel}</span>
+                  <span className="text-[10px] text-slate-500">~{prof.delayMs}ms delay</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 2. Cadence & High-Frequency Stream (Hz / ms) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            {/* Sending Rate / Interval Slider */}
+            <div className="p-4 bg-slate-900/60 rounded-lg border border-slate-800">
+              <div className="flex justify-between items-center text-xs mb-2">
+                <span className="text-slate-300 font-semibold">Sending Rate (Cadence)</span>
+                <span className="text-cyan-400 font-mono font-bold">
+                  {publishIntervalMs} ms ({(1000 / publishIntervalMs).toFixed(1)} msg/sec)
+                </span>
               </div>
               <input
                 type="range"
-                min="20"
+                min="10"
+                max="2000"
+                step="10"
+                value={publishIntervalMs}
+                onChange={(e) => setPublishIntervalMs(Number(e.target.value))}
+                className="w-full accent-cyan-400"
+              />
+              {/* Cadence Presets */}
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {[
+                  { label: '100 Hz (10ms)', ms: 10 },
+                  { label: '50 Hz (20ms)', ms: 20 },
+                  { label: '20 Hz (50ms)', ms: 50 },
+                  { label: '10 Hz (100ms)', ms: 100 },
+                  { label: '5 Hz (200ms)', ms: 200 },
+                  { label: '1 Hz (1s)', ms: 1000 },
+                ].map((item) => (
+                  <button
+                    key={item.ms}
+                    onClick={() => setPublishIntervalMs(item.ms)}
+                    className={`px-2 py-1 text-[11px] rounded border ${
+                      publishIntervalMs === item.ms
+                        ? 'bg-cyan-500 text-slate-950 font-bold border-cyan-400'
+                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Payload Density (To Saturate High Mbps / Gbps) */}
+            <div className="p-4 bg-slate-900/60 rounded-lg border border-slate-800">
+              <div className="flex justify-between items-center text-xs mb-2">
+                <span className="text-slate-300 font-semibold">Payload Data Density (Throughput Multiplier)</span>
+                <span className="text-emerald-400 font-mono font-bold">
+                  {payloadDensity}x Density (~{(payloadDensity * 0.4).toFixed(1)} KB/pkt)
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mb-2.5">
+                Simulate multi-rack industrial plants to scale data volume up to Gbps link capacity:
+              </p>
+              {/* Density Presets */}
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: '1x (~0.4 KB)', factor: 1 },
+                  { label: '5x (~2 KB)', factor: 5 },
+                  { label: '25x (~10 KB)', factor: 25 },
+                  { label: '100x (~40 KB)', factor: 100 },
+                  { label: '250x (~100 KB)', factor: 250 },
+                ].map((item) => (
+                  <button
+                    key={item.factor}
+                    onClick={() => setPayloadDensity(item.factor)}
+                    className={`px-2.5 py-1 text-[11px] rounded border ${
+                      payloadDensity === item.factor
+                        ? 'bg-emerald-500 text-slate-950 font-bold border-emerald-400'
+                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Artificial Network Delay & QoS Tuning */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+            <div className="p-3 bg-slate-900/40 rounded-lg border border-slate-800/80">
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-slate-400">Artificial Wire Delay</span>
+                <span className="text-amber-400 font-mono font-bold">{simulatedNetworkDelay} ms</span>
+              </div>
+              <input
+                type="range"
+                min="0"
                 max="250"
                 step="5"
                 value={simulatedNetworkDelay}
                 onChange={(e) => setSimulatedNetworkDelay(Number(e.target.value))}
-                className="w-full accent-emerald-400"
+                className="w-full accent-amber-400"
               />
-              <span className="text-[10px] text-slate-500 block mt-1">Leaves ample headroom below 220ms SLA</span>
             </div>
 
-            {/* Cadence Slider */}
-            <div className="p-3.5 bg-slate-900/60 rounded-lg border border-slate-800">
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-slate-400 font-semibold">Publish Cadence</span>
-                <span className="text-cyan-400 font-bold">{publishInterval} s</span>
-              </div>
-              <input
-                type="range"
-                min="0.2"
-                max="3.0"
-                step="0.1"
-                value={publishInterval}
-                onChange={(e) => setPublishInterval(Number(e.target.value))}
-                className="w-full accent-cyan-400"
-              />
-              <span className="text-[10px] text-slate-500 block mt-1">1.0s avoids cellular bufferbloat</span>
-            </div>
-
-            {/* Telemetry QoS Toggle */}
-            <div className="p-3.5 bg-slate-900/60 rounded-lg border border-slate-800">
-              <span className="text-xs text-slate-400 font-semibold block mb-2">Telemetry QoS Level</span>
+            <div className="p-3 bg-slate-900/40 rounded-lg border border-slate-800/80">
+              <span className="text-xs text-slate-400 block mb-1.5">Telemetry QoS Level</span>
               <div className="flex gap-2">
                 <button
                   onClick={() => setQosTelemetry(0)}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded ${qosTelemetry === 0 ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-400'}`}
+                  className={`flex-1 py-1 text-xs font-bold rounded ${qosTelemetry === 0 ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-400'}`}
                 >
-                  QoS 0 (Low Latency)
+                  QoS 0 (Zero Overhead)
                 </button>
                 <button
                   onClick={() => setQosTelemetry(1)}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded ${qosTelemetry === 1 ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-400'}`}
+                  className={`flex-1 py-1 text-xs font-bold rounded ${qosTelemetry === 1 ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-400'}`}
                 >
                   QoS 1 (ACKed)
                 </button>
               </div>
-              <span className="text-[10px] text-slate-500 block mt-1.5">QoS 0 skips 500ms ACK stalls</span>
             </div>
 
-            {/* Bandwidth Optimization Checkbox */}
-            <div className="p-3.5 bg-slate-900/60 rounded-lg border border-slate-800 flex flex-col justify-between">
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={stripDuplicateLatest}
-                  onChange={(e) => setStripDuplicateLatest(e.target.checked)}
-                  className="rounded accent-emerald-400"
-                />
-                Cut 50% Wire Traffic
-              </label>
-              <span className="text-[10px] text-slate-500 block">Omits duplicate latest topic to fit 2G pipe</span>
+            <div className="p-3 bg-slate-900/40 rounded-lg border border-slate-800/80 flex items-center justify-between">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={stripDuplicateLatest}
+                    onChange={(e) => setStripDuplicateLatest(e.target.checked)}
+                    className="rounded accent-emerald-400"
+                  />
+                  Compact Wire Topics
+                </label>
+                <span className="text-[10px] text-slate-500 block">Omits duplicate latest topic to conserve bandwidth</span>
+              </div>
             </div>
           </div>
         </div>
@@ -588,7 +770,7 @@ export default function GatewayPage() {
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-800/60">
                   <span className="text-slate-400">Data Transferred:</span>
-                  <span className="font-mono text-cyan-300">{(bytesSent / 1024).toFixed(1)} KB</span>
+                  <span className="font-mono text-cyan-300">{formatBytes(bytesSent)}</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-800/60">
                   <span className="text-slate-400">Spool Queue Depth:</span>
@@ -597,8 +779,8 @@ export default function GatewayPage() {
                   </span>
                 </div>
                 <div className="flex justify-between py-1.5">
-                  <span className="text-slate-400">Estimated Bandwidth:</span>
-                  <span className="font-mono text-slate-300">~14.5 kbps (Safe on 2G)</span>
+                  <span className="text-slate-400">Live Wire Throughput:</span>
+                  <span className="font-mono font-bold text-emerald-400">{formatBandwidth(currentKbps)}</span>
                 </div>
               </div>
             </div>
