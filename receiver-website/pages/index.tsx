@@ -162,8 +162,8 @@ export default function ReceiverPage() {
   };
 
   const handleIncomingEnvelope = (envelope: Envelope, topic: string) => {
-    const nowUs = BigInt(Date.now()) * 1000n;
-    const sentUs = envelope.created_at_us ? BigInt(envelope.created_at_us) : 0n;
+    const nowUs = BigInt(Date.now()) * BigInt(1000);
+    const sentUs = envelope.created_at_us ? BigInt(envelope.created_at_us) : BigInt(0);
     const latency = sentUs > 0n ? Number(nowUs - sentUs) / 1000 : null;
 
     // Filter out stale historical messages

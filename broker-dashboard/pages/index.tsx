@@ -102,7 +102,7 @@ export default function BrokerPage() {
         try {
           parsed = JSON.parse(payloadStr);
           if (parsed.created_at_us) {
-            const nowUs = BigInt(Date.now()) * 1000n;
+            const nowUs = BigInt(Date.now()) * BigInt(1000);
             const sentUs = BigInt(parsed.created_at_us);
             latency = Number(nowUs - sentUs) / 1000;
           }
