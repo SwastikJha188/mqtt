@@ -73,8 +73,24 @@ export default function BrokerPage() {
       const mqttModule = await import('mqtt');
       const mqtt = mqttModule.default ?? mqttModule;
 
-      console.log(`[Broker Console] Connecting to ${brokerUrl}...`);
-      const client = mqtt.connect(brokerUrl, {
+      let targetUrl = brokerUrl.trim();
+      if (targetUrl.startsWith('https://')) {
+        targetUrl = 'wss://' + targetUrl.slice(8);
+      } else if (targetUrl.startsWith('http://')) {
+        targetUrl = (typeof window !== 'undefined' && window.location.protocol === 'https:')
+          ? 'wss://' + targetUrl.slice(7)
+          : 'ws://' + targetUrl.slice(7);
+      } else if (!targetUrl.startsWith('ws://') && !targetUrl.startsWith('wss://')) {
+        targetUrl = (typeof window !== 'undefined' && window.location.protocol === 'https:')
+          ? `wss://${targetUrl}`
+          : `ws://${targetUrl}`;
+      }
+      if (!targetUrl.includes('/', targetUrl.indexOf('://') + 3)) {
+        targetUrl = `${targetUrl}/mqtt`;
+      }
+
+      console.log(`[Broker Console] Connecting to ${targetUrl}...`);
+      const client = mqtt.connect(targetUrl, {
         clientId: `ultron-broker-monitor-${Math.random().toString(16).slice(2, 8)}`,
         clean: true,
         connectTimeout: 5000,
